@@ -62,6 +62,34 @@ extension GitHubAPI {
         }
     }
 
+    /// Replace only `<slug>/SKILL.md`, preserving every supporting file in the
+    /// skill folder. Serialized and conflict-retried like `publish` so edits
+    /// from the app cannot race its other writes.
+    @discardableResult
+    public func updateSkillMarkdown(_ repo: RepoRef, slug: String, markdown: String,
+                                    message: String, branch: String) async throws -> String {
+        let msg = message.isEmpty ? "edit: \(slug)" : message
+        let key = BranchGate.key(repo, branch)
+        return try await BranchGate.shared.withLock(key) {
+            try await self.retryOnConflict("edit \(slug)", key: key) {
+                let (parentSHA, baseTreeSHA) = try await self.headTree(repo, branch: branch)
+                let blobSHA = try await self.uploadBlob(repo, data: Data(markdown.utf8))
+                return try await self.commitTree(
+                    repo,
+                    baseTreeSHA: baseTreeSHA,
+                    parentSHA: parentSHA,
+                    entries: [[
+                        "path": "\(slug)/SKILL.md",
+                        "mode": "100644",
+                        "type": "blob",
+                        "sha": blobSHA,
+                    ]],
+                    message: msg,
+                    branch: branch)
+            }
+        }
+    }
+
     private func publishOnce(_ repo: RepoRef, slug: String, files: [String: Data],
                             message: String, branch: String) async throws -> String {
         let (parentSHA, baseTreeSHA) = try await headTree(repo, branch: branch)

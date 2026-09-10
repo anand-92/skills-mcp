@@ -148,6 +148,28 @@ final class CachedHeadTests: XCTestCase {
                                   message: "add: two", branch: "main")
         XCTAssertEqual(StubGitHub.refReads, 2, "conflict retry must re-read HEAD fresh")
     }
+
+    func testUpdateSkillMarkdownPreservesSupportingFiles() async throws {
+        let repo = RepoRef(owner: "u", name: "reg-\(UUID().uuidString.prefix(8))")
+        StubGitHub.seed(repo: repo, branch: "main", files: [
+            "alpha/SKILL.md": "old",
+            "alpha/scripts/run.sh": "echo hi",
+            "alpha/assets/icon.png": "binary-ish",
+        ])
+        let supportingSHAs = StubGitHub.currentFiles().filter { $0.key != "alpha/SKILL.md" }
+        let api = makeAPI()
+
+        _ = try await api.updateSkillMarkdown(
+            repo, slug: "alpha", markdown: "new markdown",
+            message: "edit: alpha", branch: "main")
+
+        XCTAssertEqual(StubGitHub.currentText(at: "alpha/SKILL.md"), "new markdown")
+        XCTAssertEqual(
+            StubGitHub.currentFiles().filter { $0.key != "alpha/SKILL.md" },
+            supportingSHAs,
+            "editing SKILL.md must neither remove nor rewrite supporting files")
+        XCTAssertEqual(StubGitHub.commitCount, 1)
+    }
 }
 
 // MARK: - stub plumbing
@@ -161,6 +183,7 @@ enum StubGitHub {
     static var headCommit = ""
     static var commitTree: [String: String] = [:]   // commit SHA → tree SHA
     static var trees: [String: Tree] = [:]          // tree SHA → contents
+    static var blobContents: [String: String] = [:] // blob SHA → decoded text
     static var commitParent: [String: String] = [:]  // commit SHA → parent SHA
     static var refReads = 0
     static var commitCount = 0
@@ -172,6 +195,7 @@ enum StubGitHub {
         lock.lock(); defer { lock.unlock() }
         repoPath = ""; branch = "main"; headCommit = ""
         commitTree = [:]; trees = [:]; commitParent = [:]
+        blobContents = [:]
         refReads = 0; commitCount = 0; serial = 0
     }
 
@@ -186,11 +210,28 @@ enum StubGitHub {
         repoPath = repo.fullName
         branch = b
         var t = Tree(files: [:])
-        for (path, _) in files { t.files[path] = nextSHA("blob") }
+        for (path, content) in files {
+            let sha = nextSHA("blob")
+            t.files[path] = sha
+            blobContents[sha] = content
+        }
         let treeSHA = nextSHA("tree")
         trees[treeSHA] = t
         headCommit = nextSHA("commit")
         commitTree[headCommit] = treeSHA
+    }
+
+    static func currentFiles() -> [String: String] {
+        lock.lock(); defer { lock.unlock() }
+        guard let treeSHA = commitTree[headCommit] else { return [:] }
+        return trees[treeSHA]?.files ?? [:]
+    }
+
+    static func currentText(at path: String) -> String? {
+        lock.lock(); defer { lock.unlock() }
+        guard let treeSHA = commitTree[headCommit],
+              let blobSHA = trees[treeSHA]?.files[path] else { return nil }
+        return blobContents[blobSHA]
     }
 
     /// Move HEAD to a fresh empty-delta commit, as if pushed from elsewhere.
@@ -227,7 +268,13 @@ enum StubGitHub {
             }
             return (200, ["sha": sha, "tree": entries])
         case ("POST", "blobs"):
-            return (201, ["sha": nextSHA("blob")])
+            let sha = nextSHA("blob")
+            if let content = body?["content"] as? String,
+               let data = Data(base64Encoded: content),
+               let text = String(data: data, encoding: .utf8) {
+                blobContents[sha] = text
+            }
+            return (201, ["sha": sha])
         case ("POST", "trees"):
             guard let base = body?["base_tree"] as? String,
                   var t = trees[base],

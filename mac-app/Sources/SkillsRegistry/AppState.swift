@@ -243,6 +243,24 @@ final class AppState: ObservableObject {
         return try await api.fileContent(repo, path: "\(slug)/\(path)", branch: branch)
     }
 
+    /// Commit an edited SKILL.md without replacing the skill's supporting
+    /// files, then immediately refresh its summary in the browse list.
+    func saveSkillMarkdown(_ slug: String, markdown: String) async throws -> SkillSummary {
+        let (name, description) = Frontmatter.parseSummary(markdown, slug: slug)
+        let summary = SkillSummary(slug: slug, name: name, description: description)
+        if !isDemo {
+            guard let api, let repo else {
+                throw GitHubError(status: 0, message: "Not ready", endpoint: "")
+            }
+            _ = try await api.updateSkillMarkdown(
+                repo, slug: slug, markdown: markdown,
+                message: "edit: \(slug)", branch: branch)
+        }
+        upsertSkill(summary)
+        showToast("Saved \(slug)", .ok)
+        return summary
+    }
+
     /// Remove a skill end-to-end, mirroring `skills-registry remove`: delete
     /// the `<slug>/` subtree from the registry, then sweep the two local
     /// footprints (CLI download cache + every agent dot-folder copy).

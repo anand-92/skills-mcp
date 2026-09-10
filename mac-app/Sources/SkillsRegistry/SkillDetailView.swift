@@ -12,6 +12,9 @@ struct SkillDetailView: View {
     @State private var error: String?
     @State private var confirmRemove = false
     @State private var showInstall = false
+    @State private var isEditing = false
+    @State private var draft = ""
+    @State private var saving = false
 
     // Multi-file browsing. SKILL.md renders from `detail.markdown`; other files
     // are fetched lazily into `auxText`.
@@ -68,7 +71,30 @@ struct SkillDetailView: View {
 
     private var actions: some View {
         HStack(spacing: 8) {
-            if !state.isDemo {
+            if isEditing {
+                Button("Cancel") { cancelEditing() }
+                    .buttonStyle(GhostButtonStyle())
+                    .disabled(saving)
+                    .accessibilityIdentifier("cancelSkillEdit")
+                Button { Task { await saveEditing() } } label: {
+                    HStack(spacing: 6) {
+                        if saving { ProgressView().controlSize(.small) }
+                        Text(saving ? "Saving…" : "Save")
+                    }
+                }
+                .buttonStyle(PrimaryButtonStyle(tint: Brand.accent))
+                .disabled(saving || draft == detail?.markdown)
+                .keyboardShortcut("s", modifiers: .command)
+                .accessibilityIdentifier("saveSkillEdit")
+            } else {
+                Button { beginEditing() } label: {
+                    Label("Edit", systemImage: "pencil").font(.system(size: 12))
+                }
+                .buttonStyle(GhostButtonStyle())
+                .disabled(detail == nil)
+                .accessibilityIdentifier("editSkill")
+            }
+            if !isEditing && !state.isDemo {
                 Button { showInstall = true } label: {
                     Label("Install", systemImage: "arrow.down.circle").font(.system(size: 12))
                 }
@@ -76,13 +102,15 @@ struct SkillDetailView: View {
                 .disabled(detail == nil)
                 .accessibilityIdentifier("installSkill")
             }
-            Button { openOnGitHub() } label: {
-                Label("GitHub", systemImage: "arrow.up.right.square").font(.system(size: 12))
-            }.buttonStyle(GhostButtonStyle())
-            Button { if let d = detail { Clipboard.copy(d.markdown) ; state.showToast("Copied SKILL.md", .ok) } } label: {
-                Image(systemName: "doc.on.doc").font(.system(size: 12))
-            }.buttonStyle(GhostButtonStyle())
-            if !state.isDemo {
+            if !isEditing {
+                Button { openOnGitHub() } label: {
+                    Label("GitHub", systemImage: "arrow.up.right.square").font(.system(size: 12))
+                }.buttonStyle(GhostButtonStyle())
+                Button { if let d = detail { Clipboard.copy(d.markdown) ; state.showToast("Copied SKILL.md", .ok) } } label: {
+                    Image(systemName: "doc.on.doc").font(.system(size: 12))
+                }.buttonStyle(GhostButtonStyle())
+            }
+            if !isEditing && !state.isDemo {
                 Button { confirmRemove = true } label: {
                     Image(systemName: "trash").font(.system(size: 12))
                 }
@@ -111,15 +139,26 @@ struct SkillDetailView: View {
 
     @ViewBuilder private func fileViewer(_ d: SkillDetail) -> some View {
         if selectedFile == "SKILL.md" {
-            ScrollView {
-                // Render the body only — the frontmatter's name/description
-                // already appear in the header. "Copy" still copies the raw
-                // file (frontmatter included).
-                Markdown(Frontmatter.body(d.markdown))
-                    .markdownTheme(.brand)
-                    .textSelection(.enabled)
-                    .padding(24)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+            if isEditing {
+                TextEditor(text: $draft)
+                    .font(Brand.monoSized(13))
+                    .foregroundStyle(Brand.fg)
+                    .scrollContentBackground(.hidden)
+                    .padding(18)
+                    .background(Brand.bg)
+                    .accessibilityLabel("SKILL.md editor")
+                    .accessibilityIdentifier("skillEditor")
+            } else {
+                ScrollView {
+                    // Render the body only — the frontmatter's name/description
+                    // already appear in the header. "Copy" still copies the raw
+                    // file (frontmatter included).
+                    Markdown(Frontmatter.body(d.markdown))
+                        .markdownTheme(.brand)
+                        .textSelection(.enabled)
+                        .padding(24)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
             }
         } else if auxLoading {
             VStack { Spacer(); ProgressView().tint(Brand.accent); Spacer() }
@@ -179,6 +218,7 @@ struct SkillDetailView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .disabled(isEditing && f != selectedFile)
         .accessibilityIdentifier("file-\(f)")
     }
 
@@ -208,8 +248,40 @@ struct SkillDetailView: View {
         if let url { NSWorkspace.shared.open(url) }
     }
 
+    private func beginEditing() {
+        guard let detail else { return }
+        selectedFile = "SKILL.md"
+        auxText = nil
+        auxError = nil
+        draft = detail.markdown
+        isEditing = true
+    }
+
+    private func cancelEditing() {
+        draft = detail?.markdown ?? ""
+        isEditing = false
+    }
+
+    private func saveEditing() async {
+        guard let current = detail, draft != current.markdown else { return }
+        saving = true
+        defer { saving = false }
+        do {
+            let summary = try await state.saveSkillMarkdown(slug, markdown: draft)
+            detail = SkillDetail(
+                slug: slug,
+                name: summary.name,
+                description: summary.description,
+                markdown: draft,
+                files: current.files)
+            isEditing = false
+        } catch {
+            state.showToast("Save failed: \(error.localizedDescription)", .error)
+        }
+    }
+
     private func load() async {
-        loading = true; error = nil
+        loading = true; error = nil; isEditing = false; saving = false
         do {
             detail = try await state.fetchDetail(slug)
         } catch {

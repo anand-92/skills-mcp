@@ -273,7 +273,8 @@ UI is verified by launching in demo mode and driving it with cua-driver
 (macOS Accessibility computer-use). The app exposes stable
 `accessibilityIdentifier`s on the key controls (`signInWithGitHub`,
 `searchField`, `publishButton`, `importSelected`, `installCLI`,
-`removeSkill`, `installSkill`, `addSourceField`, `addFetch`, `addSelected`,
+`removeSkill`, `installSkill`, `editSkill`, `skillEditor`, `saveSkillEdit`,
+`cancelSkillEdit`, `addSourceField`, `addFetch`, `addSelected`,
 `agentPickerConfirm`, `discoverQueryField`, `discoverSearch`, `discoverImport`,
 `discoverInstallToggle`, `discoverAllowUnsafe`, `discoverConfirmImport`,
 `nav-Browse` / `nav-Discover` / `nav-Add` / `nav-Import` / `nav-Settings`)
